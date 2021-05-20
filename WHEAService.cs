@@ -12,13 +12,21 @@ using System.Management;
 using System.IO;
 using System.Runtime.Serialization.Formatters.Binary;
 using System.Threading;
+using System.Security.Principal;
 
 namespace WHEAservice
 {
-
+    class NotElevated : Exception
+    {
+        public NotElevated(string message)
+        {
+        }
+    }
     public partial class WHEAService : ServiceBase
     {
         private static EventLog eventLog2;
+        static string logName = "WHEAService";
+        static string logSource = "WHEAServiceLog";
 
         public enum ServiceState
         {
@@ -45,30 +53,84 @@ namespace WHEAservice
 
         [DllImport("advapi32.dll", SetLastError = true)]
         private static extern bool SetServiceStatus(System.IntPtr handle, ref ServiceStatus serviceStatus);
-        public void InitializeEventLog()
+        public bool InitializeEventLog()
         {
-            eventLog1 = new System.Diagnostics.EventLog();
-            if (!System.Diagnostics.EventLog.SourceExists("WHEAServiceV2"))
+            
+            try
             {
-                System.Diagnostics.EventLog.CreateEventSource(
-                    "WHEAServiceV2", "Application");
+                bool isElevated;
+
+                using (WindowsIdentity identity = WindowsIdentity.GetCurrent())
+                {
+                    WindowsPrincipal principal = new WindowsPrincipal(identity);
+                    isElevated = principal.IsInRole(WindowsBuiltInRole.Administrator);
+                }
+
+                if (!isElevated) throw new NotElevated(message:"Administrative privileges required");
+
             }
-            eventLog1.Source = "WHEAServiceV2";
-            eventLog1.Log = "Application";
+            catch(Exception e)
+            {
+                Console.Write(e.Message);
+                return false;
+            }
+
+
+            eventLog1 = new EventLog();
+
+            string logByName;
+
+            if (EventLog.SourceExists(logName))
+            {
+                logByName = EventLog.LogNameFromSourceName(logName, ".");
+
+                if (logByName != logSource) {
+                    Console.WriteLine("LogSource=" + logByName);
+                    EventLog.DeleteEventSource(logName);
+                    if (logByName != "Application" && logByName != "System") { 
+                        EventLog.Delete(logByName);
+                        Console.WriteLine("LogSource=" + logByName + " deleted.");
+                    } else
+                    {
+                        Console.WriteLine("LogSource=" + logByName + " cannot be deleted.");
+                    }
+
+                }
+
+            }
+            else
+            {
+                EventLog.CreateEventSource(logName, logSource);
+            }
+            eventLog1.Source = logName;
+            eventLog1.Log = logSource;
+
+            return true;
         }
 
         public WHEAService()
         {
+            bool initLog;
+            AutoLog = false;
             InitializeComponent();
-            InitializeEventLog();
+            initLog = InitializeEventLog();
+            if (!initLog)
+            {
+                var timer = new System.Threading.Timer(async (e) =>
+                {
+                    await Task.Delay(500);
+                    StopService();
+                }, null, 0, 5000);
+            }
         }
 
         public void StartDbg()
         {
+            bool initLog;
             InitializeComponent();
-            InitializeEventLog();
+            initLog = InitializeEventLog();
             string[] args = new string[0];
-            OnStart(args);
+            if (initLog) OnStart(args);
         }
 
         protected override void OnStart(string[] args)
@@ -155,7 +217,7 @@ namespace WHEAservice
 
                     }
 
-                    if (!disabled) EventMsg("Failed to disble WHEA error source type " + esType + " ID=" + esIDret);
+                    if (!disabled) EventMsg("Failed to disable WHEA error source type " + esType + " ID=" + esIDret);
 
                 }
 
@@ -188,18 +250,18 @@ namespace WHEAservice
 
         public static void EventMsg(string msg)
         {
-            eventLog2 = new System.Diagnostics.EventLog();
-            eventLog2.Source = "WHEAServiceV2";
-            eventLog2.Log = "Application";
+            eventLog2 = new EventLog();
+            eventLog2.Source = logName;
+            eventLog2.Log = logSource;
             eventLog2.WriteEntry(msg);
             Console.WriteLine("INFO " + msg);
         }
 
         public static void EventErr(string msg)
         {
-            eventLog2 = new System.Diagnostics.EventLog();
-            eventLog2.Source = "WHEAServiceV2";
-            eventLog2.Log = "Application";
+            eventLog2 = new EventLog();
+            eventLog2.Source = "WHEAService";
+            eventLog2.Log = "WHEAServiceLog";
             eventLog2.WriteEntry(msg, EventLogEntryType.Error);
             Console.WriteLine("ERROR " + msg);
         }
@@ -243,7 +305,7 @@ namespace WHEAservice
 
                 int Length;
                 int Version;
-                int Type;
+                int TypeEs;
                 int State;
                 int MaxRawDataLength;
                 int NumRecordsToPreallocate;
@@ -270,7 +332,7 @@ namespace WHEAservice
                             Length = reader.ReadInt32();
                             InfoSeek = int.Parse(Length.ToString()) - 40;
                             Version = reader.ReadInt32();
-                            Type = reader.ReadInt32();
+                            TypeEs = reader.ReadInt32();
                             State = reader.ReadInt32();
                             MaxRawDataLength = reader.ReadInt32();
                             NumRecordsToPreallocate = reader.ReadInt32();
@@ -283,7 +345,7 @@ namespace WHEAservice
 #if DEBUG
                             WHEAservice.WHEAService.EventErr(i + " Length: " + Length.ToString());
                             WHEAservice.WHEAService.EventErr(i + " Version: " + Version.ToString());
-                            WHEAservice.WHEAService.EventErr(i + " Type: " + Type.ToString());
+                            WHEAservice.WHEAService.EventErr(i + " Type: " + TypeEs.ToString());
                             WHEAservice.WHEAService.EventErr(i + " State: " + State.ToString());
                             WHEAservice.WHEAService.EventErr(i + " MaxRawDataLength: " + MaxRawDataLength.ToString());
                             WHEAservice.WHEAService.EventErr(i + " NumRecordsToPreallocate: " + NumRecordsToPreallocate.ToString());
@@ -294,11 +356,13 @@ namespace WHEAservice
                             WHEAservice.WHEAService.EventErr(i + " Info Length: " + Info.Length.ToString());
 #endif
 
-                            if (Type.ToString() == esType.ToString()) return (int.Parse(ErrorSourceId.ToString()), int.Parse(State.ToString()));
+                            if (esType == TypeEs) return (int.Parse(ErrorSourceId.ToString()), int.Parse(State.ToString()));
 
                         }
                     }
                 }
+
+                obj.Dispose();
 
                 return (-1, 5);
 
@@ -336,6 +400,7 @@ namespace WHEAservice
                         inParams, null);
 
                 WHEAservice.WHEAService.EventMsg("Status=" + outParams["Status"].ToString());
+                obj.Dispose();
                 return int.Parse(outParams["Status"].ToString());
 
             }

@@ -24,9 +24,6 @@ namespace WHEAservice
             #else
                         WHEAService myServ = new WHEAService();
                         myServ.StartDbg();
-                        // here Process is my Service function
-                        // that will run when my service onstart is call
-                        // you need to call your own method or function name here instead of Process();
             #endif
         }
         }
