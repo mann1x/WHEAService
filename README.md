@@ -48,3 +48,17 @@ There are events logged in the Applications Custom logs under WHEAServiceLog.
 Since it's a Service it'll stop WHEA even before you Login or without Login at all.
 
 No memory leaks, no usage of resources in background.
+
+## What is doing exactly?
+
+**It's not fixing WHEA errors or any performance degradation or stability issues that comes from running at high FCLK.**
+
+It will only stop the reporting which is bogging down the system when the WHEA errors are coming in at high rate.
+
+There's a pre-defined list of WHEA error sources in the code for which an attempt will be done to issue a stop request.
+
+Some of them can't be stopped. The query will fail. That's not important; just issuing a stop request will silence them.
+
+You can see in the Event Logs under the WHEAServiceLog custom provider the list of the sources targeted for the stop request, a list with all your WHEA sources and their status at the beginning and at then end of the process.
+
+

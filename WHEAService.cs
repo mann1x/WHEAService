@@ -13,9 +13,104 @@ using System.IO;
 using System.Runtime.Serialization.Formatters.Binary;
 using System.Threading;
 using System.Security.Principal;
+using System.Collections;
 
 namespace WHEAservice
 {
+
+    public class EventSource
+    {
+        private int esType;
+        private string esDescription;
+        public EventSource(int EsType, string EsDescription)
+        {
+            esType = EsType;
+            esDescription = EsDescription;
+        }
+        public int EsType
+        {
+            get { return esType; }
+            set { esType = value; }
+        }
+        public string EsDescription
+        {
+            get { return esDescription; }
+            set { esDescription = value; }
+        }
+    }
+    public class EventSources : IEnumerable
+    {
+        private EventSource[] eslist;
+
+        public EventSources()
+        {
+            eslist = new EventSource[17]
+            {
+                new EventSource(0,"WheaErrSrcTypeMCE = 0x00, Machine Check Exception"),
+                new EventSource(1,"WheaErrSrcTypeCMC = 0x01, Corrected Machine Check"),
+                new EventSource(2,"WheaErrSrcTypeCPE = 0x02, Corrected Platform Error"),
+                new EventSource(3,"WheaErrSrcTypeNMI = 0x03, Non-Maskable Interrupt"),
+                new EventSource(4,"WheaErrSrcTypePCIe = 0x04, PCI Express Error"),
+                new EventSource(5,"WheaErrSrcTypeGeneric = 0x05, Other types of error sources"),
+                new EventSource(6,"WheaErrSrcTypeINIT = 0x06, IA64 INIT Error Source"),
+                new EventSource(7,"WheaErrSrcTypeBOOT = 0x07, BOOT Error Source"),
+                new EventSource(8,"WheaErrSrcTypeSCIGeneric = 0x08, SCI-based generic error source"),
+                new EventSource(9,"WheaErrSrcTypeIPFMCA = 0x09, Itanium Machine Check Abort"),
+                new EventSource(10,"WheaErrSrcTypeIPFCMC = 0x0a, Itanium Machine check"),
+                new EventSource(11,"WheaErrSrcTypeIPFCPE = 0x0b, Itanium Corrected Platform Error"),
+                new EventSource(12,"WheaErrSrcTypeGenericV2 = 0x0c, Other types of error sources v2"),
+                new EventSource(13,"WheaErrSrcTypeSCIGenericV2 = 0x0d, SCI-based GHESv2"),
+                new EventSource(14,"WheaErrSrcTypeBMC = 0x0e, BMC error info"),
+                new EventSource(15,"WheaErrSrcTypePMEM = 0x0f, ARS PMEM Error Source"),
+                new EventSource(16,"WheaErrSrcTypeDeviceDriver = 0x10, Device Driver Error Source"),
+            };
+        }
+        public IEnumerable<EventSource> GetAllSources()
+        {
+            return eslist;
+        }
+        private class MyEnumerator : IEnumerator
+        {
+            public EventSource[] eslist;
+            int position = -1;
+
+            public MyEnumerator(EventSource[] list)
+            {
+                eslist = list;
+            }
+            private IEnumerator getEnumerator()
+            {
+                return (IEnumerator)this;
+            }
+            public bool MoveNext()
+            {
+                position++;
+                return (position < eslist.Length);
+            }
+            public void Reset()
+            {
+                position = -1;
+            }
+            public object Current
+            {
+                get
+                {
+                    try
+                    {
+                        return eslist[position];
+                    }
+                    catch (IndexOutOfRangeException)
+                    {
+                        throw new InvalidOperationException();
+                    }
+                }
+            }
+        }
+        public IEnumerator GetEnumerator()
+        {
+            return new MyEnumerator(eslist);
+        }
+    }
     class NotElevated : Exception
     {
         public NotElevated(string message)
@@ -146,9 +241,40 @@ namespace WHEAservice
             
             ManagementScope Scope = null;
 
+            EventSources esClass = new EventSources();
+
+
             bool connected = false;
 
             int[] esArray = { 16, 0, 1, 3 , 7 };
+
+            var sb = new System.Text.StringBuilder();
+
+            sb.AppendLine("Error Sources targeted to be disabled:");
+            sb.AppendLine("");
+
+            foreach (int targetID in esArray)
+            {
+                bool bFound = false;
+                string eDescription = "";
+                foreach (var element in esClass.GetAllSources())
+                {
+                    if (targetID == element.EsType)
+                    {
+                        eDescription = element.EsDescription;
+                        bFound = true;
+                    }
+                }
+                if (!bFound)
+                {
+                    eDescription = "not found";
+                }
+                sb.AppendLine("Type: " + String.Format("{0,2}", targetID.ToString()) + " Description: " + eDescription);
+            }
+
+            EventMsg(sb.ToString());
+
+            sb = null;
 
             try
             { 
@@ -163,6 +289,8 @@ namespace WHEAservice
 
             if (connected)
             {
+
+                WHEA.GetSourceInfo(Scope, -999);
 
                 int esIDret;
                 int esState;
@@ -220,6 +348,8 @@ namespace WHEAservice
                     if (!disabled) EventMsg("Failed to disable WHEA error source type " + esType + " ID=" + esIDret);
 
                 }
+
+                WHEA.GetSourceInfo(Scope, -999);
 
             }
 
@@ -316,13 +446,37 @@ namespace WHEAservice
                 byte[] Info;
                 int InfoSeek;
 
+                var sb = new System.Text.StringBuilder();
+                EventSources esClass = new EventSources();
                 BinaryFormatter bf = new BinaryFormatter();
+
+                string GetState(int state)
+                {
+                    switch (state) { 
+                        case 1:
+                            return String.Format("{0,-13}", "Stopped");
+                        case 2:
+                            return String.Format("{0,-13}", "Started");
+                        case 3:
+                            return String.Format("{0,-13}", "Removed");
+                        case 4:
+                            return String.Format("{0,-13}", "RemovePending");
+                        default:
+                            return String.Format("{0,-13}", "Unknown");
+                    }
+                }
+
                 using (var ms = new MemoryStream())
                 {
                     ms.Write((byte[])outParams["ErrorSourceArray"], 0, sLength);
 #if DEBUG
                     WHEAservice.WHEAService.EventErr("MS: " + ms.Length.ToString());
 #endif
+
+                    if (esType == -999) {
+                        sb.AppendLine("Error Sources count is " + sCount.ToString() + ", current status:");
+                        sb.AppendLine("");
+                    }
 
                     ms.Position = 0;
                     using (BinaryReader reader = new System.IO.BinaryReader(ms))
@@ -355,27 +509,53 @@ namespace WHEAservice
                             WHEAservice.WHEAService.EventErr(i + " Flags: " + Flags.ToString());
                             WHEAservice.WHEAService.EventErr(i + " Info Length: " + Info.Length.ToString());
 #endif
+                            if (esType == -999)
+                            {
+                                bool bFound = false;
+                                string eDescription = "";
+                                foreach (var element in esClass.GetAllSources()) {
+                                    if (TypeEs == element.EsType)
+                                    {
+                                        eDescription = element.EsDescription;
+                                        bFound = true;
+                                    }
+                                }
+                                if (!bFound)
+                                {
+                                    eDescription = "not found";
+                                }
+                                sb.AppendLine("ID: " + String.Format("{0,2}", ErrorSourceId.ToString()) + " Type: " + String.Format("{0,2}", TypeEs.ToString()) + " State: " + GetState(State) + " Description: " + eDescription);
+                            }
 
                             if (esType == TypeEs) return (int.Parse(ErrorSourceId.ToString()), int.Parse(State.ToString()));
 
                         }
                     }
+
                 }
 
+                if (esType == -999)
+                {
+                    WHEAservice.WHEAService.EventMsg(sb.ToString());
+                }
+
+                sb = null;
+
                 obj.Dispose();
+                
 
                 return (-1, 5);
 
             }
             catch (ManagementException e)
             {
-                WHEAservice.WHEAService.EventErr("Failed GetSourceID, WMI exception thrown: " + e.ToString());
+                WHEAservice.WHEAService.EventErr("Failed GetSourceInfo, WMI exception thrown: " + e.ToString());
                 int[,] empty = new int[4, 2];
                 return (-1, 5);
             }
             catch (Exception e)
             {
-                WHEAservice.WHEAService.EventErr("Failed GetSourceID, exception thrown: " + e.ToString());
+                WHEAservice.WHEAService.EventErr("Failed GetSourceInfo, exception thrown: " + e.ToString());
                 return (-1 ,5);
             }
         }
@@ -391,7 +571,7 @@ namespace WHEAservice
                 obj.Get();
 
                 ManagementBaseObject inParams =
-                    obj.GetMethodParameters("EnableErrorSourceRtn");
+                    obj.GetMethodParameters("DisableErrorSourceRtn");
 
                 inParams["ErrorSourceId"] = Int32.Parse(ErrorSourceId.ToString());
 
@@ -400,7 +580,9 @@ namespace WHEAservice
                         inParams, null);
 
                 WHEAservice.WHEAService.EventMsg("Status=" + outParams["Status"].ToString());
+                
                 obj.Dispose();
+                
                 return int.Parse(outParams["Status"].ToString());
 
             }
@@ -413,7 +595,7 @@ namespace WHEAservice
             }
             catch (Exception e)
             {
-                WHEAservice.WHEAService.EventErr("Failed DisableSource for " + ErrorSourceId + ", exception thrown: " + e.ToString());
+                WHEAservice.WHEAService.EventErr("Failed DisableSource (this can be normal) for " + ErrorSourceId + ", exception thrown: " + e.ToString());
                 return 5;
             }
         }
