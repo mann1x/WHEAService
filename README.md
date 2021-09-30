@@ -61,4 +61,6 @@ Some of them can't be stopped. The query will fail. That's not important; just i
 
 You can see in the Event Logs under the WHEAServiceLog custom provider the list of the sources targeted for the stop request, a list with all your WHEA sources and their status at the beginning and at then end of the process.
 
+Peformances can be tested with the xmr-stak-rx monero miner.
 
+Follow the instructions here: https://www.overclock.net/threads/wheaservice-whea-errors-suppressor-unleash-ryzen-processor-high-fclk-without-performance-penalties.1778781/
